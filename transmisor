@@ -1,0 +1,192 @@
+#include <SPI.h>
+#include <LoRa.h>
+#include <WiFi.h>
+#include <ThingSpeak.h>
+#include "DHT.h"
+
+// =====================
+// Pines LoRa Ra-02
+// =====================
+#define LORA_NSS   5
+#define LORA_RST   16
+#define LORA_DIO0  17
+
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+
+// =====================
+// DHT11
+// =====================
+#define DHTPIN   4
+#define DHTTYPE  DHT11
+
+// =====================
+// LED transmisor
+// =====================
+#define LED_PIN  13
+
+// =====================
+// Umbral de temperatura
+// =====================
+#define TEMP_UMBRAL 27.0
+
+// =====================
+// WiFi y ThingSpeak
+// =====================
+const char* ssid = "USTA_Estudiantes";
+const char* password = "#soytomasino";
+
+unsigned long channelID = 3392064;     
+const char* writeAPIKey = "1WNP3LLACF8ABO90";
+
+WiFiClient client;
+DHT dht(DHTPIN, DHTTYPE);
+
+int contador = 0;
+
+unsigned long tiempoAnterior = 0;
+const unsigned long intervaloEnvio = 20000; 
+
+void conectarWiFi() {
+  if (WiFi.status() == WL_CONNECTED) {
+    return;
+  }
+
+  Serial.print("Conectando a WiFi: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  int intentos = 0;
+  while (WiFi.status() != WL_CONNECTED && intentos < 30) {
+    delay(500);
+    Serial.print(".");
+    intentos++;
+  }
+
+  Serial.println();
+
+  if (WiFi.status() == WL_CONNECTED) {
+    Serial.println("WiFi conectado");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+  } else {
+    Serial.println("No se pudo conectar a WiFi. Continuara enviando por LoRa.");
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  dht.begin();
+
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
+  LoRa.setPins(LORA_NSS, LORA_RST, LORA_DIO0);
+
+  Serial.println("Iniciando LoRa transmisor...");
+
+  if (!LoRa.begin(433E6)) {
+    Serial.println("ERROR: LoRa transmisor no encontrado.");
+    while (true) {
+      digitalWrite(LED_PIN, HIGH);
+      delay(200);
+      digitalWrite(LED_PIN, LOW);
+      delay(200);
+    }
+  }
+
+  LoRa.setSpreadingFactor(12);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(8);
+  LoRa.setSyncWord(0x12);
+  LoRa.setTxPower(17);
+
+  Serial.println("LoRa transmisor OK");
+
+  conectarWiFi();
+  ThingSpeak.begin(client);
+}
+
+void loop() {
+  unsigned long tiempoActual = millis();
+
+  if (tiempoActual - tiempoAnterior >= intervaloEnvio) {
+    tiempoAnterior = tiempoActual;
+
+    float temperatura = dht.readTemperature();
+    float humedad = dht.readHumidity();
+
+    // Evita enviar lecturas falsas como 0.8 °C y 0 %
+    if (isnan(temperatura) || isnan(humedad) || temperatura < 5 || humedad < 1) {
+      Serial.println("Lectura invalida del DHT11. No se envia paquete.");
+      return;
+    }
+
+    contador++;
+
+    int motorEstado = 0;
+
+    if (temperatura >= TEMP_UMBRAL) {
+      motorEstado = 1;
+    } else {
+      motorEstado = 0;
+    }
+
+    // Formato del mensaje:
+    // T:29.5,H:72.0,M:1,N:5
+    String mensaje = "T:" + String(temperatura, 1) +
+                     ",H:" + String(humedad, 1) +
+                     ",M:" + String(motorEstado) +
+                     ",N:" + String(contador);
+
+    // Enviar por LoRa
+    LoRa.beginPacket();
+    LoRa.print(mensaje);
+    LoRa.endPacket();
+
+    digitalWrite(LED_PIN, HIGH);
+    delay(200);
+    digitalWrite(LED_PIN, LOW);
+
+    Serial.println("────────────────────────");
+    Serial.print("Paquete enviado: ");
+    Serial.println(mensaje);
+
+    Serial.print("Temperatura: ");
+    Serial.print(temperatura);
+    Serial.println(" °C");
+
+    Serial.print("Humedad: ");
+    Serial.print(humedad);
+    Serial.println(" %");
+
+    Serial.print("Estado motor enviado: ");
+    Serial.println(motorEstado);
+
+    // Enviar a ThingSpeak
+    conectarWiFi();
+
+    if (WiFi.status() == WL_CONNECTED) {
+      ThingSpeak.setField(1, temperatura);
+      ThingSpeak.setField(2, humedad);
+      ThingSpeak.setField(3, motorEstado);
+      ThingSpeak.setField(4, contador);
+
+      int respuesta = ThingSpeak.writeFields(channelID, writeAPIKey);
+
+      if (respuesta == 200) {
+        Serial.println("Datos enviados a ThingSpeak correctamente.");
+      } else {
+        Serial.print("Error enviando a ThingSpeak. Codigo: ");
+        Serial.println(respuesta);
+      }
+    } else {
+      Serial.println("Sin WiFi. Solo se envio por LoRa.");
+    }
+  }
+}
