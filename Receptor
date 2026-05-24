@@ -1,0 +1,127 @@
+#include <SPI.h>
+#include <LoRa.h>
+
+// =====================
+// Pines LoRa receptor
+// =====================
+#define LORA_NSS   5
+#define LORA_RST   16
+#define LORA_DIO0  17
+
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+
+// =====================
+// Motor DC con PN2222A
+// =====================
+#define MOTOR_PIN  25
+
+void setup() {
+  Serial.begin(115200);
+  delay(1500);
+
+  pinMode(MOTOR_PIN, OUTPUT);
+  digitalWrite(MOTOR_PIN, LOW);
+
+  SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_NSS);
+  LoRa.setPins(LORA_NSS, LORA_RST, LORA_DIO0);
+
+  Serial.println("Iniciando LoRa receptor...");
+
+  if (!LoRa.begin(433E6)) {
+    Serial.println("ERROR: LoRa receptor no encontrado.");
+    Serial.println("Revisa VCC, GND, NSS, SCK, MOSI, MISO y RST.");
+    while (true);
+  }
+
+  LoRa.setSpreadingFactor(12);
+  LoRa.setSignalBandwidth(125E3);
+  LoRa.setCodingRate4(8);
+  LoRa.setSyncWord(0x12);
+
+  Serial.println("LoRa receptor OK");
+  Serial.println("Esperando paquetes...");
+}
+
+void loop() {
+  int packetSize = LoRa.parsePacket();
+
+  if (packetSize) {
+    String mensaje = "";
+
+    while (LoRa.available()) {
+      mensaje += (char)LoRa.read();
+    }
+
+    Serial.println("────────────────────────");
+    Serial.print("Mensaje recibido: ");
+    Serial.println(mensaje);
+
+    Serial.print("RSSI: ");
+    Serial.print(LoRa.packetRssi());
+    Serial.println(" dBm");
+
+    Serial.print("SNR: ");
+    Serial.println(LoRa.packetSnr());
+
+    float temperatura = extraerValorFloat(mensaje, "T:");
+    float humedad = extraerValorFloat(mensaje, "H:");
+    int motorEstado = extraerValorInt(mensaje, "M:");
+
+    Serial.print("Temperatura recibida: ");
+    Serial.print(temperatura);
+    Serial.println(" °C");
+
+    Serial.print("Humedad recibida: ");
+    Serial.print(humedad);
+    Serial.println(" %");
+
+    Serial.print("Orden de motor recibida: ");
+    Serial.println(motorEstado);
+
+    if (motorEstado == 1) {
+      digitalWrite(MOTOR_PIN, HIGH);
+      Serial.println("MOTOR ENCENDIDO");
+    } else {
+      digitalWrite(MOTOR_PIN, LOW);
+      Serial.println("Motor apagado");
+    }
+  }
+}
+
+float extraerValorFloat(String mensaje, String clave) {
+  int inicio = mensaje.indexOf(clave);
+
+  if (inicio == -1) {
+    return 0.0;
+  }
+
+  inicio += clave.length();
+
+  int fin = mensaje.indexOf(",", inicio);
+
+  if (fin == -1) {
+    fin = mensaje.length();
+  }
+
+  return mensaje.substring(inicio, fin).toFloat();
+}
+
+int extraerValorInt(String mensaje, String clave) {
+  int inicio = mensaje.indexOf(clave);
+
+  if (inicio == -1) {
+    return 0;
+  }
+
+  inicio += clave.length();
+
+  int fin = mensaje.indexOf(",", inicio);
+
+  if (fin == -1) {
+    fin = mensaje.length();
+  }
+
+  return mensaje.substring(inicio, fin).toInt();
+}
